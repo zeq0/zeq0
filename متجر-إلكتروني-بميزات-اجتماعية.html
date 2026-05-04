@@ -1,0 +1,1263 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Souqna | سوقنا - المتجر الإلكتروني الاحترافي</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  * { font-family: 'Tajawal', sans-serif; }
+  body { scroll-behavior: smooth; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+  .gradient-bg {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  }
+  .gradient-text {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .glass {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+  .carousel-snap {
+    scroll-snap-type: x mandatory;
+  }
+  .carousel-item {
+    scroll-snap-align: center;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-slide-in { animation: slideIn 0.4s ease-out; }
+  .aspect-16-9 { aspect-ratio: 16 / 9; }
+</style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+<div id="app"></div>
+
+<div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-[100] space-y-2"></div>
+
+<script>
+const SUPABASE_URL = 'https://yqcnakgynctaxedrbpje.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_WguxDRav85tZjqoUHmKQOg_2xhNY4x-';
+const { createClient } = supabase;
+const supabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let currentUser = null;
+let currentView = 'home';
+let products = [];
+let myProducts = [];
+let editingProductId = null;
+
+// ============= UTILS =============
+const toast = (msg, type = 'success') => {
+  const colors = {
+    success: 'bg-green-500',
+    error: 'bg-red-500',
+    info: 'bg-blue-500'
+  };
+  const id = Date.now();
+  const el = document.createElement('div');
+  el.id = `toast-${id}`;
+  el.className = `${colors[type]} text-white px-6 py-3 rounded-lg shadow-lg animate-slide-in flex items-center gap-2`;
+  el.innerHTML = `
+    <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'xmark-circle' : 'info-circle'}"></i>
+    <span>${msg}</span>
+  `;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+};
+
+const formatPrice = (price) => {
+  return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(price);
+};
+
+const formatDate = (date) => {
+  return new Date(date).toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
+// ============= AUTH =============
+async function checkAuth() {
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (session) {
+    currentUser = session.user;
+    await loadUserProfile();
+  }
+  render();
+}
+
+async function loadUserProfile() {
+  const { data, error } = await supabaseClient
+    .from('profiles')
+    .select('*')
+    .eq('id', currentUser.id)
+    .single();
+  
+  if (data) {
+    currentUser.profile = data;
+  } else {
+    // Create profile if doesn't exist
+    await supabaseClient.from('profiles').insert({
+      id: currentUser.id,
+      email: currentUser.email,
+      full_name: '',
+      avatar_url: '',
+      bio: '',
+      social_links: {},
+      buyers_count: 0
+    });
+    currentUser.profile = { full_name: '', avatar_url: '', bio: '', social_links: {}, buyers_count: 0 };
+  }
+}
+
+async function signUp(email, password, fullName) {
+  const { data, error } = await supabaseClient.auth.signUp({ email, password });
+  if (error) {
+    toast(error.message, 'error');
+    return false;
+  }
+  if (data.user) {
+    await supabaseClient.from('profiles').insert({
+      id: data.user.id,
+      email,
+      full_name: fullName
+    });
+    toast('تم إنشاء الحساب بنجاح! تحقق من بريدك الإلكتروني', 'success');
+    return true;
+  }
+}
+
+async function signIn(email, password) {
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) {
+    toast(error.message, 'error');
+    return false;
+  }
+  currentUser = data.user;
+  await loadUserProfile();
+  toast('مرحباً بك!', 'success');
+  currentView = 'dashboard';
+  render();
+  return true;
+}
+
+async function signOut() {
+  await supabaseClient.auth.signOut();
+  currentUser = null;
+  currentView = 'home';
+  render();
+  toast('تم تسجيل الخروج', 'info');
+}
+
+async function resetPassword(email) {
+  const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin
+  });
+  if (error) {
+    toast(error.message, 'error');
+    return false;
+  }
+  toast('تم إرسال رابط إعادة تعيين كلمة المرور', 'success');
+  return true;
+}
+
+// ============= PRODUCTS =============
+async function loadProducts() {
+  const { data, error } = await supabaseClient
+    .from('products')
+    .select('*, profiles(full_name, avatar_url)')
+    .order('created_at', { ascending: false });
+  
+  if (error) {
+    console.error(error);
+    return;
+  }
+  products = data || [];
+}
+
+async function loadMyProducts() {
+  if (!currentUser) return;
+  const { data, error } = await supabaseClient
+    .from('products')
+    .select('*')
+    .eq('user_id', currentUser.id)
+    .order('created_at', { ascending: false });
+  
+  if (error) {
+    console.error(error);
+    return;
+  }
+  myProducts = data || [];
+}
+
+async function uploadImages(files, productId) {
+  const urls = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${currentUser.id}/${productId}/${Date.now()}_${i}.${fileExt}`;
+    
+    const { data, error } = await supabaseClient.storage
+      .from('products')
+      .upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: false
+      });
+    
+    if (error) {
+      console.error('Upload error:', error);
+      toast('خطأ في رفع الصورة', 'error');
+      continue;
+    }
+    
+    const { data: { publicUrl } } = supabaseClient.storage
+      .from('products')
+      .getPublicUrl(fileName);
+    
+    urls.push(publicUrl);
+  }
+  return urls;
+}
+
+async function deleteImages(imageUrls) {
+  if (!imageUrls || imageUrls.length === 0) return;
+  const paths = imageUrls.map(url => {
+    const parts = url.split('/products/');
+    return parts[1];
+  }).filter(Boolean);
+  
+  if (paths.length > 0) {
+    await supabaseClient.storage.from('products').remove(paths);
+  }
+}
+
+async function createProduct(title, description, price, imageFiles) {
+  if (!currentUser) {
+    toast('يجب تسجيل الدخول أولاً', 'error');
+    return false;
+  }
+  
+  const tempId = Date.now();
+  const imageUrls = await uploadImages(imageFiles, tempId);
+  
+  const { data, error } = await supabaseClient.from('products').insert({
+    user_id: currentUser.id,
+    title,
+    description,
+    price: parseFloat(price),
+    images: imageUrls,
+    likes: 0,
+    views: 0,
+    rating: 0
+  }).select().single();
+  
+  if (error) {
+    toast(error.message, 'error');
+    await deleteImages(imageUrls);
+    return false;
+  }
+  
+  toast('تم إضافة المنتج بنجاح', 'success');
+  await loadProducts();
+  await loadMyProducts();
+  currentView = 'dashboard';
+  render();
+  return true;
+}
+
+async function updateProduct(productId, title, description, price, newImageFiles, existingImages, imagesToDelete) {
+  if (!currentUser) {
+    toast('يجب تسجيل الدخول أولاً', 'error');
+    return false;
+  }
+  
+  // Delete removed images
+  if (imagesToDelete.length > 0) {
+    await deleteImages(imagesToDelete);
+  }
+  
+  // Upload new images
+  const newImageUrls = await uploadImages(newImageFiles, productId);
+  const allImages = [...existingImages, ...newImageUrls];
+  
+  const { error } = await supabaseClient
+    .from('products')
+    .update({
+      title,
+      description,
+      price: parseFloat(price),
+      images: allImages,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', productId)
+    .eq('user_id', currentUser.id);
+  
+  if (error) {
+    toast(error.message, 'error');
+    return false;
+  }
+  
+  toast('تم تحديث المنتج بنجاح', 'success');
+  editingProductId = null;
+  await loadProducts();
+  await loadMyProducts();
+  render();
+  return true;
+}
+
+async function deleteProduct(productId, images) {
+  if (!confirm('هل أنت متأكد من حذف هذا المنتج؟')) return;
+  
+  await deleteImages(images);
+  
+  const { error } = await supabaseClient
+    .from('products')
+    .delete()
+    .eq('id', productId)
+    .eq('user_id', currentUser.id);
+  
+  if (error) {
+    toast(error.message, 'error');
+    return;
+  }
+  
+  toast('تم حذف المنتج', 'success');
+  await loadProducts();
+  await loadMyProducts();
+  render();
+}
+
+async function likeProduct(productId) {
+  if (!currentUser) {
+    toast('يجب تسجيل الدخول للإعجاب', 'error');
+    return;
+  }
+  
+  const { data: product } = await supabaseClient
+    .from('products')
+    .select('likes')
+    .eq('id', productId)
+    .single();
+  
+  await supabaseClient
+    .from('products')
+    .update({ likes: (product.likes || 0) + 1 })
+    .eq('id', productId);
+  
+  await loadProducts();
+  render();
+}
+
+async function incrementViews(productId) {
+  const { data: product } = await supabaseClient
+    .from('products')
+    .select('views')
+    .eq('id', productId)
+    .single();
+  
+  await supabaseClient
+    .from('products')
+    .update({ views: (product.views || 0) + 1 })
+    .eq('id', productId);
+}
+
+// ============= PROFILE =============
+async function updateProfile(updates, avatarFile) {
+  let avatarUrl = currentUser.profile.avatar_url;
+  
+  if (avatarFile) {
+    const fileExt = avatarFile.name.split('.').pop();
+    const fileName = `${currentUser.id}/avatar.${fileExt}`;
+    
+    const { error: uploadError } = await supabaseClient.storage
+      .from('avatars')
+      .upload(fileName, avatarFile, { upsert: true });
+    
+    if (!uploadError) {
+      const { data: { publicUrl } } = supabaseClient.storage
+        .from('avatars')
+        .getPublicUrl(fileName);
+      avatarUrl = publicUrl;
+    }
+  }
+  
+  const { error } = await supabaseClient
+    .from('profiles')
+    .update({ ...updates, avatar_url: avatarUrl })
+    .eq('id', currentUser.id);
+  
+  if (error) {
+    toast(error.message, 'error');
+    return false;
+  }
+  
+  await loadUserProfile();
+  toast('تم تحديث الملف الشخصي', 'success');
+  render();
+  return true;
+}
+
+// ============= COMPONENTS =============
+function Navbar() {
+  return `
+    <nav class="gradient-bg shadow-lg sticky top-0 z-50">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex justify-between items-center h-16">
+          <div class="flex items-center gap-8">
+            <button onclick="navigate('home')" class="text-white font-bold text-2xl flex items-center gap-2">
+              <i class="fas fa-store"></i>
+              <span class="gradient-text bg-white px-2 py-1 rounded">سوقنا</span>
+            </button>
+            <div class="hidden md:flex gap-6">
+              <button onclick="navigate('home')" class="text-white hover:text-purple-200 transition">الرئيسية</button>
+              ${currentUser ? `
+                <button onclick="navigate('dashboard')" class="text-white hover:text-purple-200 transition">لوحة التحكم</button>
+                <button onclick="navigate('create-product')" class="text-white hover:text-purple-200 transition">
+                  <i class="fas fa-plus-circle"></i> إضافة منتج
+                </button>
+              ` : ''}
+            </div>
+          <div class="flex items-center gap-4">
+            ${currentUser ? `
+              <button onclick="navigate('profile')" class="flex items-center gap-2 text-white hover:text-purple-200 transition">
+                <img src="${currentUser.profile?.avatar_url || 'https://ui-avatars.com/api/?name=' + (currentUser.profile?.full_name || 'User') + '&background=random'}" 
+                     class="w-8 h-8 rounded-full border-2 border-white" />
+                <span class="hidden sm:inline">${currentUser.profile?.full_name || 'حسابي'}</span>
+              </button>
+              <button onclick="signOut()" class="bg-white text-purple-600 px-4 py-2 rounded-lg hover:bg-purple-50 transition text-sm font-medium">
+                <i class="fas fa-sign-out-alt"></i>
+              </button>
+            ` : `
+              <button onclick="navigate('login')" class="text-white hover:text-purple-200 transition">تسجيل الدخول</button>
+              <button onclick="navigate('signup')" class="bg-white text-purple-600 px-4 py-2 rounded-lg hover:bg-purple-50 transition text-sm font-medium">
+                إنشاء حساب
+              </button>
+            `}
+          </div>
+        </div>
+      </div>
+    </nav>
+  `;
+}
+
+function ProductCarousel({ images, productId }) {
+  if (!images || images.length === 0) {
+    return `<div class="aspect-16-9 bg-gray-200 dark:bg-gray-700 rounded-t-xl flex items-center justify-center">
+      <i class="fas fa-image text-6xl text-gray-400"></i>
+    </div>`;
+  }
+  
+  return `
+    <div class="relative group">
+      <div id="carousel-${productId}" class="flex overflow-x-auto scrollbar-hide snap-x snap-mandatory carousel-snap aspect-16-9 rounded-t-xl bg-gray-100 dark:bg-gray-800">
+        ${images.map((img, idx) => `
+          <img src="${img}" 
+               alt="Product ${idx + 1}" 
+               class="carousel-item w-full h-full flex-shrink-0 object-cover"
+               loading="lazy" />
+        `).join('')}
+      </div>
+      ${images.length > 1 ? `
+        <button onclick="scrollCarousel('${productId}', -1)" 
+                class="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition">
+          <i class="fas fa-chevron-right"></i>
+        </button>
+        <button onclick="scrollCarousel('${productId}', 1)" 
+                class="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition">
+          <i class="fas fa-chevron-left"></i>
+        </button>
+        <div class="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+          ${images.map((_, idx) => `
+            <div class="w-2 h-2 rounded-full bg-white/50"></div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function ProductCard(product) {
+  const isOwner = currentUser && currentUser.id === product.user_id;
+  return `
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden animate-slide-in">
+      ${ProductCarousel({ images: product.images, productId: product.id })}
+      <div class="p-5">
+        <div class="flex justify-between items-start mb-3">
+          <h3 class="font-bold text-xl line-clamp-1">${product.title}</h3>
+          <span class="gradient-bg text-white px-3 py-1 rounded-full text-sm font-bold">
+            ${formatPrice(product.price)}
+          </span>
+        </div>
+        <p class="text-gray-600 dark:text-gray-400 text-sm mb-4 line-clamp-2">${product.description}</p>
+        
+        <div class="flex items-center gap-2 mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
+          <img src="${product.profiles?.avatar_url || 'https://ui-avatars.com/api/?name=' + (product.profiles?.full_name || 'User')}" 
+               class="w-8 h-8 rounded-full" />
+          <div class="flex-1">
+            <p class="text-sm font-medium">${product.profiles?.full_name || 'مستخدم'}</p>
+            <p class="text-xs text-gray-500">${formatDate(product.created_at)}</p>
+          </div>
+        </div>
+        
+        <div class="flex justify-between items-center text-sm text-gray-600 dark:text-gray-400 mb-4">
+          <button onclick="likeProduct(${product.id})" class="flex items-center gap-1 hover:text-red-500 transition">
+            <i class="fas fa-heart"></i>
+            <span>${product.likes || 0}</span>
+          </button>
+          <div class="flex items-center gap-1">
+            <i class="fas fa-eye"></i>
+            <span>${product.views || 0}</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <i class="fas fa-star text-yellow-500"></i>
+            <span>${product.rating || 0}</span>
+          </div>
+        </div>
+        
+        <div class="flex gap-2">
+          <button onclick="viewProduct(${product.id})" 
+                  class="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg transition font-medium">
+            <i class="fas fa-shopping-cart"></i> عرض التفاصيل
+          </button>
+          ${isOwner ? `
+            <button onclick="editProduct(${product.id})" 
+                    class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition">
+              <i class="fas fa-edit"></i>
+            </button>
+            <button onclick="deleteProduct(${product.id}, ${JSON.stringify(product.images).replace(/"/g, '&quot;')})" 
+                    class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition">
+              <i class="fas fa-trash"></i>
+            </button>
+          ` : `
+            <button onclick="shareProduct(${product.id})" 
+                    class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg transition">
+              <i class="fas fa-share-alt"></i>
+            </button>
+          `}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function HomeView() {
+  return `
+    <div>
+      <!-- Hero Section -->
+      <div class="gradient-bg text-white py-20 px-4">
+        <div class="max-w-7xl mx-auto text-center">
+          <h1 class="text-5xl md:text-6xl font-extrabold mb-6 animate-slide-in">
+            اكتشف أفضل المنتجات
+          </h1>
+          <p class="text-xl mb-8 text-purple-100">منصة متكاملة للبيع والشراء بأمان وسهولة</p>
+          ${!currentUser ? `
+            <button onclick="navigate('signup')" 
+                    class="bg-white text-purple-600 px-8 py-4 rounded-lg text-lg font-bold hover:bg-purple-50 transition shadow-xl">
+              ابدأ الآن مجاناً
+            </button>
+          ` : `
+            <button onclick="navigate('create-product')" 
+                    class="bg-white text-purple-600 px-8 py-4 rounded-lg text-lg font-bold hover:bg-purple-50 transition shadow-xl">
+              <i class="fas fa-plus-circle"></i> أضف منتجك الأول
+            </button>
+          `}
+        </div>
+      </div>
+      
+      <!-- Products Grid -->
+      <div class="max-w-7xl mx-auto px-4 py-12">
+        <div class="flex justify-between items-center mb-8">
+          <h2 class="text-3xl font-bold">أحدث المنتجات</h2>
+          <span class="text-gray-600 dark:text-gray-400">${products.length} منتج</span>
+        </div>
+        ${products.length > 0 ? `
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            ${products.map(p => ProductCard(p)).join('')}
+          </div>
+        ` : `
+          <div class="text-center py-20">
+            <i class="fas fa-box-open text-6xl text-gray-300 mb-4"></i>
+            <p class="text-xl text-gray-500">لا توجد منتجات حتى الآن</p>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function DashboardView() {
+  const totalViews = myProducts.reduce((sum, p) => sum + (p.views || 0), 0);
+  const totalLikes = myProducts.reduce((sum, p) => sum + (p.likes || 0), 0);
+  const totalRevenue = myProducts.length * 50; // Dummy calculation
+  
+  return `
+    <div class="max-w-7xl mx-auto px-4 py-8">
+      <h1 class="text-3xl font-bold mb-8">لوحة التحكم</h1>
+      
+      <!-- Stats -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div class="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-6 rounded-xl shadow-lg">
+          <div class="flex justify-between items-start">
+            <div>
+              <p class="text-purple-100 text-sm">المنتجات</p>
+              <p class="text-3xl font-bold mt-2">${myProducts.length}</p>
+            </div>
+            <i class="fas fa-box text-4xl text-purple-300"></i>
+          </div>
+        </div>
+        <div class="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-xl shadow-lg">
+          <div class="flex justify-between items-start">
+            <div>
+              <p class="text-blue-100 text-sm">المشاهدات</p>
+              <p class="text-3xl font-bold mt-2">${totalViews}</p>
+            </div>
+            <i class="fas fa-eye text-4xl text-blue-300"></i>
+          </div>
+        </div>
+        <div class="bg-gradient-to-br from-pink-500 to-pink-600 text-white p-6 rounded-xl shadow-lg">
+          <div class="flex justify-between items-start">
+            <div>
+              <p class="text-pink-100 text-sm">الإعجابات</p>
+              <p class="text-3xl font-bold mt-2">${totalLikes}</p>
+            </div>
+            <i class="fas fa-heart text-4xl text-pink-300"></i>
+          </div>
+        </div>
+        <div class="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-xl shadow-lg">
+          <div class="flex justify-between items-start">
+            <div>
+              <p class="text-green-100 text-sm">المشترين</p>
+              <p class="text-3xl font-bold mt-2">${currentUser.profile?.buyers_count || 0}</p>
+            </div>
+            <i class="fas fa-users text-4xl text-green-300"></i>
+          </div>
+        </div>
+      </div>
+      
+      <!-- My Products -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+        <div class="flex justify-between items-center mb-6">
+          <h2 class="text-2xl font-bold">منتجاتي</h2>
+          <button onclick="navigate('create-product')" 
+                  class="gradient-bg text-white px-6 py-2 rounded-lg hover:opacity-90 transition">
+            <i class="fas fa-plus"></i> منتج جديد
+          </button>
+        </div>
+        ${myProducts.length > 0 ? `
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            ${myProducts.map(p => ProductCard(p)).join('')}
+          </div>
+        ` : `
+          <div class="text-center py-12">
+            <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+            <p class="text-xl text-gray-500 mb-4">لم تقم بإضافة أي منتجات بعد</p>
+            <button onclick="navigate('create-product')" 
+                    class="gradient-bg text-white px-6 py-3 rounded-lg hover:opacity-90 transition">
+              أضف منتجك الأول
+            </button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+function ProductFormView() {
+  const isEditing = editingProductId !== null;
+  const product = isEditing ? myProducts.find(p => p.id === editingProductId) : null;
+  const existingImages = product?.images || [];
+  
+  return `
+    <div class="max-w-4xl mx-auto px-4 py-8">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
+        <h1 class="text-3xl font-bold mb-8">
+          ${isEditing ? 'تعديل المنتج' : 'إضافة منتج جديد'}
+        </h1>
+        
+        <form id="product-form" onsubmit="handleProductSubmit(event)" class="space-y-6">
+          <div>
+            <label class="block text-sm font-medium mb-2">عنوان المنتج *</label>
+            <input type="text" id="product-title" required 
+                   value="${product?.title || ''}"
+                   class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700"
+                   placeholder="مثال: هاتف iPhone 15 Pro">
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium mb-2">الوصف *</label>
+            <textarea id="product-description" required rows="4"
+                      class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700"
+                      placeholder="اكتب وصفاً تفصيلياً للمنتج...">${product?.description || ''}</textarea>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium mb-2">السعر (ريال سعودي) *</label>
+            <input type="number" id="product-price" required min="0" step="0.01"
+                   value="${product?.price || ''}"
+                   class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700"
+                   placeholder="0.00">
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium mb-2">صور المنتج *</label>
+            <div class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6">
+              <input type="file" id="product-images" multiple accept="image/*" 
+                     ${!isEditing ? 'required' : ''}
+                     class="hidden" onchange="previewImages(event)">
+              <label for="product-images" class="cursor-pointer flex flex-col items-center">
+                <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-2"></i>
+                <p class="text-gray-600 dark:text-gray-400">اضغط لرفع الصور أو اسحبها هنا</p>
+                <p class="text-sm text-gray-500 mt-1">يمكنك رفع عدة صور (PNG, JPG, WEBP)</p>
+              </label>
+            </div>
+            
+            ${existingImages.length > 0 ? `
+              <div class="mt-4">
+                <p class="text-sm font-medium mb-2">الصور الحالية:</p>
+                <div id="existing-images" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  ${existingImages.map((img, idx) => `
+                    <div class="relative group">
+                      <img src="${img}" class="w-full aspect-square object-cover rounded-lg">
+                      <button type="button" onclick="removeExistingImage('${img}')" 
+                              class="absolute top-2 left-2 bg-red-500 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition">
+                        <i class="fas fa-trash text-xs"></i>
+                      </button>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+            
+            <div id="image-preview" class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4"></div>
+          </div>
+          
+          <div class="flex gap-4">
+            <button type="submit" 
+                    class="flex-1 gradient-bg text-white py-3 rounded-lg hover:opacity-90 transition font-medium">
+              <i class="fas fa-save"></i> ${isEditing ? 'حفظ التعديلات' : 'إضافة المنتج'}
+            </button>
+            <button type="button" onclick="navigate('dashboard')" 
+                    class="px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+              إلغاء
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function ProfileView() {
+  const profile = currentUser.profile || {};
+  return `
+    <div class="max-w-4xl mx-auto px-4 py-8">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg overflow-hidden">
+        <div class="gradient-bg h-32"></div>
+        <div class="px-8 pb-8">
+          <div class="flex flex-col md:flex-row gap-6 -mt-16">
+            <img src="${profile.avatar_url || 'https://ui-avatars.com/api/?name=' + (profile.full_name || 'User') + '&size=128'}" 
+                 class="w-32 h-32 rounded-xl border-4 border-white dark:border-gray-800 shadow-lg object-cover" />
+            <div class="flex-1 mt-4 md:mt-16">
+              <h1 class="text-3xl font-bold">${profile.full_name || 'مستخدم'}</h1>
+              <p class="text-gray-600 dark:text-gray-400 mt-2">${profile.bio || 'لا يوجد نبذة شخصية'}</p>
+            </div>
+          </div>
+          
+          <!-- Social Links -->
+          ${profile.social_links && Object.keys(profile.social_links).length > 0 ? `
+            <div class="flex gap-4 mt-6">
+              ${profile.social_links.twitter ? `<a href="${profile.social_links.twitter}" target="_blank" class="text-blue-400 hover:text-blue-600"><i class="fab fa-twitter text-2xl"></i></a>` : ''}
+              ${profile.social_links.instagram ? `<a href="${profile.social_links.instagram}" target="_blank" class="text-pink-500 hover:text-pink-700"><i class="fab fa-instagram text-2xl"></i></a>` : ''}
+              ${profile.social_links.facebook ? `<a href="${profile.social_links.facebook}" target="_blank" class="text-blue-600 hover:text-blue-800"><i class="fab fa-facebook text-2xl"></i></a>` : ''}
+              ${profile.social_links.whatsapp ? `<a href="https://wa.me/${profile.social_links.whatsapp}" target="_blank" class="text-green-500 hover:text-green-700"><i class="fab fa-whatsapp text-2xl"></i></a>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+      
+      <!-- Edit Profile Form -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 mt-6">
+        <h2 class="text-2xl font-bold mb-6">تعديل الملف الشخصي</h2>
+        <form id="profile-form" onsubmit="handleProfileSubmit(event)" class="space-y-6">
+          <div>
+            <label class="block text-sm font-medium mb-2">الصورة الشخصية</label>
+            <input type="file" id="avatar-upload" accept="image/*" 
+                   class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700">
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium mb-2">الاسم الكامل</label>
+            <input type="text" id="profile-name" value="${profile.full_name || ''}"
+                   class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700">
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium mb-2">النبذة الشخصية</label>
+            <textarea id="profile-bio" rows="3"
+                      class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700">${profile.bio || ''}</textarea>
+          </div>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium mb-2">تويتر</label>
+              <input type="url" id="social-twitter" value="${profile.social_links?.twitter || ''}"
+                     class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                     placeholder="https://twitter.com/username">
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-2">انستجرام</label>
+              <input type="url" id="social-instagram" value="${profile.social_links?.instagram || ''}"
+                     class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                     placeholder="https://instagram.com/username">
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-2">فيسبوك</label>
+              <input type="url" id="social-facebook" value="${profile.social_links?.facebook || ''}"
+                     class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                     placeholder="https://facebook.com/username">
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-2">واتساب</label>
+              <input type="tel" id="social-whatsapp" value="${profile.social_links?.whatsapp || ''}"
+                     class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                     placeholder="966501234567">
+            </div>
+          </div>
+          
+          <button type="submit" 
+                  class="w-full gradient-bg text-white py-3 rounded-lg hover:opacity-90 transition font-medium">
+            <i class="fas fa-save"></i> حفظ التغييرات
+          </button>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function AuthView() {
+  const isLogin = currentView === 'login';
+  const isSignup = currentView === 'signup';
+  const isForgot = currentView === 'forgot-password';
+  
+  return `
+    <div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
+      <div class="max-w-md w-full">
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8">
+          <div class="text-center mb-8">
+            <div class="gradient-bg w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4">
+              <i class="fas fa-store text-white text-3xl"></i>
+            </div>
+            <h2 class="text-3xl font-bold">
+              ${isLogin ? 'مرحباً بعودتك' : isSignup ? 'إنشاء حساب جديد' : 'استعادة كلمة المرور'}
+            </h2>
+            <p class="text-gray-600 dark:text-gray-400 mt-2">
+              ${isLogin ? 'سجل دخولك للمتابعة' : isSignup ? 'انضم إلينا الآن' : 'أدخل بريدك الإلكتروني'}
+            </p>
+          </div>
+          
+          <form onsubmit="handleAuthSubmit(event)" class="space-y-4">
+            ${isSignup ? `
+              <div>
+                <label class="block text-sm font-medium mb-2">الاسم الكامل</label>
+                <input type="text" id="auth-name" required
+                       class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700">
+              </div>
+            ` : ''}
+            
+            <div>
+              <label class="block text-sm font-medium mb-2">البريد الإلكتروني</label>
+              <input type="email" id="auth-email" required
+                     class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700"
+                     placeholder="example@email.com">
+            </div>
+            
+            ${!isForgot ? `
+              <div>
+                <label class="block text-sm font-medium mb-2">كلمة المرور</label>
+                <input type="password" id="auth-password" required minlength="6"
+                       class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-purple-500 dark:bg-gray-700"
+                       placeholder="••••••••">
+              </div>
+            ` : ''}
+            
+            <button type="submit" 
+                    class="w-full gradient-bg text-white py-3 rounded-lg hover:opacity-90 transition font-medium text-lg">
+              ${isLogin ? 'تسجيل الدخول' : isSignup ? 'إنشاء الحساب' : 'إرسال الرابط'}
+            </button>
+          </form>
+          
+          <div class="mt-6 text-center text-sm">
+            ${isLogin ? `
+              <button onclick="navigate('forgot-password')" class="text-purple-600 hover:text-purple-700">
+                نسيت كلمة المرور؟
+              </button>
+              <div class="mt-4">
+                <span class="text-gray-600 dark:text-gray-400">ليس لديك حساب؟</span>
+                <button onclick="navigate('signup')" class="text-purple-600 hover:text-purple-700 font-medium mr-1">
+                  إنشاء حساب
+                </button>
+              </div>
+            ` : isSignup ? `
+              <span class="text-gray-600 dark:text-gray-400">لديك حساب بالفعل؟</span>
+              <button onclick="navigate('login')" class="text-purple-600 hover:text-purple-700 font-medium mr-1">
+                تسجيل الدخول
+              </button>
+            ` : `
+              <button onclick="navigate('login')" class="text-purple-600 hover:text-purple-700">
+                العودة لتسجيل الدخول
+              </button>
+            `}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function Footer() {
+  return `
+    <footer class="bg-gray-900 text-gray-300 mt-20">
+      <div class="max-w-7xl mx-auto px-4 py-12">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
+          <div>
+            <h3 class="text-white font-bold text-xl mb-4 flex items-center gap-2">
+              <i class="fas fa-store"></i>
+              سوقنا
+            </h3>
+            <p class="text-sm">منصة متكاملة للبيع والشراء بأمان وسهولة</p>
+            <div class="flex gap-4 mt-4">
+              <a href="#" class="hover:text-purple-400 transition"><i class="fab fa-twitter text-xl"></i></a>
+              <a href="#" class="hover:text-purple-400 transition"><i class="fab fa-instagram text-xl"></i></a>
+              <a href="#" class="hover:text-purple-400 transition"><i class="fab fa-facebook text-xl"></i></a>
+            </div>
+          </div>
+          
+          <div>
+            <h4 class="text-white font-semibold mb-4">روابط سريعة</h4>
+            <ul class="space-y-2 text-sm">
+              <li><button onclick="navigate('home')" class="hover:text-purple-400 transition">الرئيسية</button></li>
+              <li><a href="#" class="hover:text-purple-400 transition">من نحن</a></li>
+              <li><a href="#" class="hover:text-purple-400 transition">كيف نعمل</a></li>
+              <li><a href="#" class="hover:text-purple-400 transition">المدونة</a></li>
+            </ul>
+          </div>
+          
+          <div>
+            <h4 class="text-white font-semibold mb-4">الدعم</h4>
+            <ul class="space-y-2 text-sm">
+              <li><a href="#" class="hover:text-purple-400 transition">مركز المساعدة</a></li>
+              <li><a href="#" class="hover:text-purple-400 transition">الشروط والأحكام</a></li>
+              <li><a href="#" class="hover:text-purple-400 transition">سياسة الخصوصية</a></li>
+              <li><a href="#" class="hover:text-purple-400 transition">اتصل بنا</a></li>
+            </ul>
+          </div>
+          
+          <div>
+            <h4 class="text-white font-semibold mb-4">تواصل معنا</h4>
+            <ul class="space-y-2 text-sm">
+              <li class="flex items-center gap-2">
+                <i class="fas fa-envelope"></i>
+                <span>info@souqna.com</span>
+              </li>
+              <li class="flex items-center gap-2">
+                <i class="fas fa-phone"></i>
+                <span>+966 50 123 4567</span>
+              </li>
+              <li class="flex items-center gap-2">
+                <i class="fas fa-map-marker-alt"></i>
+                <span>الرياض، المملكة العربية السعودية</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+        
+        <div class="border-t border-gray-800 mt-8 pt-8 text-center text-sm">
+          <p>&copy; 2024 سوقنا. جميع الحقوق محفوظة.</p>
+        </div>
+      </div>
+    </footer>
+  `;
+}
+
+// ============= RENDER =============
+async function render() {
+  await loadProducts();
+  if (currentUser) await loadMyProducts();
+  
+  let content = '';
+  
+  switch(currentView) {
+    case 'home':
+      content = HomeView();
+      break;
+    case 'login':
+    case 'signup':
+    case 'forgot-password':
+      content = AuthView();
+      break;
+    case 'dashboard':
+      if (!currentUser) navigate('login');
+      content = DashboardView();
+      break;
+    case 'create-product':
+    case 'edit-product':
+      if (!currentUser) navigate('login');
+      content = ProductFormView();
+      break;
+    case 'profile':
+      if (!currentUser) navigate('login');
+      content = ProfileView();
+      break;
+    default:
+      content = HomeView();
+  }
+  
+  document.getElementById('app').innerHTML = `
+    ${Navbar()}
+    <main class="min-h-[calc(100vh-4rem)]">
+      ${content}
+    </main>
+    ${Footer()}
+  `;
+}
+
+// ============= EVENT HANDLERS =============
+function navigate(view) {
+  currentView = view;
+  window.scrollTo(0, 0);
+  render();
+}
+
+window.navigate = navigate;
+window.signOut = signOut;
+window.likeProduct = likeProduct;
+window.deleteProduct = deleteProduct;
+window.editProduct = (id) => {
+  editingProductId = id;
+  currentView = 'edit-product';
+  render();
+};
+
+window.viewProduct = (id) => {
+  incrementViews(id);
+  toast('جاري فتح تفاصيل المنتج...', 'info');
+};
+
+window.shareProduct = (id) => {
+  const url = `${window.location.origin}?product=${id}`;
+  navigator.clipboard.writeText(url);
+  toast('تم نسخ رابط المنتج', 'success');
+};
+
+window.scrollCarousel = (productId, direction) => {
+  const carousel = document.getElementById(`carousel-${productId}`);
+  if (carousel) {
+    const scrollAmount = carousel.clientWidth;
+    carousel.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
+  }
+};
+
+let selectedFiles = [];
+let existingImagesToKeep = [];
+let imagesToDelete = [];
+
+window.previewImages = (event) => {
+  const files = Array.from(event.target.files);
+  selectedFiles = [...selectedFiles, ...files];
+  const preview = document.getElementById('image-preview');
+  
+  preview.innerHTML = selectedFiles.map((file, idx) => `
+    <div class="relative group">
+      <img src="${URL.createObjectURL(file)}" class="w-full aspect-square object-cover rounded-lg">
+      <button type="button" onclick="removeNewImage(${idx})" 
+              class="absolute top-2 left-2 bg-red-500 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition">
+        <i class="fas fa-trash text-xs"></i>
+      </button>
+      <span class="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
+        جديد
+      </span>
+    </div>
+  `).join('');
+};
+
+window.removeNewImage = (idx) => {
+  selectedFiles.splice(idx, 1);
+  previewImages({ target: { files: selectedFiles } });
+};
+
+window.removeExistingImage = (url) => {
+  imagesToDelete.push(url);
+  existingImagesToKeep = existingImagesToKeep.filter(img => img !== url);
+  const imgEl = event.target.closest('.relative');
+  if (imgEl) imgEl.remove();
+};
+
+window.handleProductSubmit = async (e) => {
+  e.preventDefault();
+  const title = document.getElementById('product-title').value;
+  const description = document.getElementById('product-description').value;
+  const price = document.getElementById('product-price').value;
+  
+  if (editingProductId) {
+    await updateProduct(editingProductId, title, description, price, selectedFiles, existingImagesToKeep, imagesToDelete);
+    existingImagesToKeep = [];
+    imagesToDelete = [];
+    selectedFiles = [];
+  } else {
+    if (selectedFiles.length === 0) {
+      toast('يجب رفع صورة واحدة على الأقل', 'error');
+      return;
+    }
+    await createProduct(title, description, price, selectedFiles);
+    selectedFiles = [];
+  }
+};
+
+window.handleAuthSubmit = async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('auth-email')?.value;
+  const password = document.getElementById('auth-password')?.value;
+  const name = document.getElementById('auth-name')?.value;
+  
+  if (currentView === 'login') {
+    await signIn(email, password);
+  } else if (currentView === 'signup') {
+    const success = await signUp(email, password, name);
+    if (success) navigate('login');
+  } else if (currentView === 'forgot-password') {
+    await resetPassword(email);
+  }
+};
+
+window.handleProfileSubmit = async (e) => {
+  e.preventDefault();
+  const avatarFile = document.getElementById('avatar-upload').files[0];
+  const updates = {
+    full_name: document.getElementById('profile-name').value,
+    bio: document.getElementById('profile-bio').value,
+    social_links: {
+      twitter: document.getElementById('social-twitter').value,
+      instagram: document.getElementById('social-instagram').value,
+      facebook: document.getElementById('social-facebook').value,
+      whatsapp: document.getElementById('social-whatsapp').value
+    }
+  };
+  await updateProfile(updates, avatarFile);
+};
+
+// Initialize existing images when editing
+document.addEventListener('DOMContentLoaded', () => {
+  if (editingProductId) {
+    const product = myProducts.find(p => p.id === editingProductId);
+    if (product) existingImagesToKeep = [...product.images];
+  }
+});
+
+// ============= INIT =============
+checkAuth();
+
+// Listen for auth changes
+supabaseClient.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_IN') {
+    currentUser = session.user;
+    loadUserProfile().then(() => render());
+  } else if (event === 'SIGNED_OUT') {
+    currentUser = null;
+    render();
+  }
+});
+</script>
+
+<!-- 
+DATABASE SCHEMA - قم بإنشاء هذه الجداول في Supabase SQL Editor:
+
+-- 1. جدول الملفات الشخصية
+CREATE TABLE profiles (
+  id UUID REFERENCES auth.users PRIMARY KEY,
+  email TEXT,
+  full_name TEXT,
+  avatar_url TEXT,
+  bio TEXT,
+  social_links JSONB DEFAULT '{}'::jsonb,
+  buyers_count INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 2. جدول المنتجات
+CREATE TABLE products (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  price DECIMAL(10,2) NOT NULL,
+  images TEXT[] DEFAULT '{}',
+  likes INTEGER DEFAULT 0,
+  views INTEGER DEFAULT 0,
+  rating DECIMAL(2,1) DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 3. تفعيل RLS
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+
+-- 4. سياسات profiles
+CREATE POLICY "Public profiles are viewable by everyone" ON profiles
+  FOR SELECT USING (true);
+
+CREATE POLICY "Users can update own profile" ON profiles
+  FOR UPDATE USING (auth.uid() = id);
+
+CREATE POLICY "Users can insert own profile" ON profiles
+  FOR INSERT WITH CHECK (auth.uid() = id);
+
+-- 5. سياسات products
+CREATE POLICY "Products are viewable by everyone" ON products
+  FOR SELECT USING (true);
+
+CREATE POLICY "Users can insert own products" ON products
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own products" ON products
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own products" ON products
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- 6. Storage Buckets - قم بإنشائها من Dashboard:
+-- products bucket (public)
+-- avatars bucket (public)
+
+-- 7. سياسات Storage
+CREATE POLICY "Anyone can view product images" ON storage.objects
+  FOR SELECT USING (bucket_id = 'products');
+
+CREATE POLICY "Authenticated users can upload product images" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'products' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Users can delete own product images" ON storage.objects
+  FOR DELETE USING (bucket_id = 'products' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+CREATE POLICY "Anyone can view avatars" ON storage.objects
+  FOR SELECT USING (bucket_id = 'avatars');
+
+CREATE POLICY "Users can upload own avatar" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'avatars' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Users can update own avatar" ON storage.objects
+  FOR UPDATE USING (bucket_id = 'avatars' AND auth.uid()::text = (storage.foldername(name))[1]);
+-->
+
+</body>
+</html>
